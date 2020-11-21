@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using Windows.Devices.Bluetooth;
 using Windows.Devices.Bluetooth.Advertisement;
 using Windows.Devices.Bluetooth.GenericAttributeProfile;
+using Windows.Devices.Enumeration;
 using Windows.Storage.Streams;
 
 namespace scratch_link
@@ -292,6 +293,16 @@ namespace scratch_link
             }
 
             _peripheral = await BluetoothLEDevice.FromBluetoothAddressAsync(peripheralId);
+
+            if (!_peripheral.DeviceInformation.Pairing.IsPaired) {
+            //  DevicePairingResult dpr = await _peripheral.DeviceInformation.Pairing.PairAsync(DevicePairingProtectionLevel.Encryption);
+                DeviceInformationCustomPairing customPairing = _peripheral.DeviceInformation.Pairing.Custom;
+                customPairing.PairingRequested += PairingRequestedHandler;
+                DevicePairingResult dpr = await customPairing.PairAsync(DevicePairingKinds.ConfirmOnly, DevicePairingProtectionLevel.Encryption);
+                customPairing.PairingRequested -= PairingRequestedHandler;
+                Debug.Print("Pairing result = " + dpr.Status.ToString());
+            }
+
             var servicesResult = await _peripheral.GetGattServicesAsync(BluetoothCacheMode.Uncached);
             if (servicesResult.Status != GattCommunicationStatus.Success)
             {
@@ -329,6 +340,13 @@ namespace scratch_link
             _watcher = null;
             _reportedPeripherals.Clear();
             _optionalServices = null;
+        }
+
+        private async void PairingRequestedHandler(
+            DeviceInformationCustomPairing sender,
+            DevicePairingRequestedEventArgs args)
+        {
+            args.Accept();
         }
 
         private void OnPeripheralStatusChanged(BluetoothLEDevice sender, object args)
@@ -389,7 +407,7 @@ namespace scratch_link
 
             if (startNotifications)
             {
-                await StartNotifications(endpoint, encoding);
+                await StartNotifications(endpoint, encoding, GattClientCharacteristicConfigurationDescriptorValue.Notify);
             }
 
             switch (readResult.Status)
@@ -411,16 +429,17 @@ namespace scratch_link
             var encoding = parameters.TryGetValue("encoding", out var encodingToken)
                 ? encodingToken?.ToObject<string>() // possibly null and that's OK
                 : "base64";
-            await StartNotifications(endpoint, encoding);
+            var charConfigDesc = parameters.TryGetValue("charConfigDesc", out var encodingToken2)
+                ? parameters["charConfigDesc"].Value<GattClientCharacteristicConfigurationDescriptorValue>() : GattClientCharacteristicConfigurationDescriptorValue.Notify;
+            await StartNotifications(endpoint, encoding, charConfigDesc);
         }
 
-        private async Task StartNotifications(GattCharacteristic endpoint, string encoding)
+        private async Task StartNotifications(GattCharacteristic endpoint, string encoding, GattClientCharacteristicConfigurationDescriptorValue charConfigDesc)
         {
             if (!_notifyCharacteristics.Contains(endpoint))
             {
                 endpoint.ValueChanged += OnValueChanged;
-                var notificationRequestResult = await endpoint.WriteClientCharacteristicConfigurationDescriptorAsync(
-                        GattClientCharacteristicConfigurationDescriptorValue.Notify);
+                var notificationRequestResult = await endpoint.WriteClientCharacteristicConfigurationDescriptorAsync(charConfigDesc);
                 if (notificationRequestResult != GattCommunicationStatus.Success)
                 {
                     endpoint.ValueChanged -= OnValueChanged;
